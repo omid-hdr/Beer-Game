@@ -5,6 +5,9 @@ from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, Mess
 from domain.models import GameSession, GameConfig
 from application.interfaces import IGameRepository
 from utils.reporting import create_global_cost_bar_chart, create_team_inventory_chart
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Conversation States
 ASK_ROUNDS, ASK_DEMAND = range(2)
@@ -75,6 +78,10 @@ def get_admin_conversation_handler(repo: IGameRepository) -> ConversationHandler
             f"`/join {game_id}`",
             parse_mode="Markdown"
         )
+
+        await repo.save_game(new_game)
+        logger.info(f"✅ ACTION: Admin {update.effective_user.id} created Game [{game_id}] with {rounds} rounds.")
+
         return ConversationHandler.END
 
     async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -133,4 +140,5 @@ def get_report_handlers(repo: IGameRepository):
                 caption=f"📉 **Inventory Analytics - Team {team_code}**",
                 parse_mode="Markdown"
             )
+
     return CommandHandler("report", generate_reports)

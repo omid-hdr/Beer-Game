@@ -5,6 +5,8 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, fil
 from domain.models import TeamState, Role
 from application.interfaces import IGameRepository
 from presentation.keyboards import get_lobby_keyboard, get_role_selection_keyboard
+import logging
+logger = logging.getLogger(__name__)
 
 
 def generate_team_code(length: int = 4) -> str:
@@ -13,16 +15,22 @@ def generate_team_code(length: int = 4) -> str:
 
 
 def get_player_handlers(repo: IGameRepository):
+
+
+
     async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handles /join <Game_ID>"""
         if not context.args or len(context.args) != 1:
             await update.message.reply_text("⚠️ Usage: `/join <Game_ID>`", parse_mode="Markdown")
             return
 
-        game_id = context.args[0].upper()
+        game_id = context.args[0].strip().upper()
+        logger.info(f"🔍 ACTION: User {update.effective_user.id} is attempting to join Game [{game_id}]")
+
         game = await repo.get_game(game_id)
 
         if not game:
+            logger.warning(f"❌ FAILED: User {update.effective_user.id} tried to join non-existent Game [{game_id}]")
             await update.message.reply_text("❌ Game not found. Please check the ID.")
             return
 
