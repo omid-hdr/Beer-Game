@@ -117,6 +117,12 @@ def get_player_handlers(repo: IGameRepository):
         _, game_id, team_code, role_value = query.data.split(":")
         role_enum = Role(role_value)
 
+        # NEW: Prevent one user from taking multiple roles in the same team
+        game = await repo.get_game(game_id)
+        if any(p.user_id == user_id for p in game.teams[team_code].players.values()):
+            await query.answer("❌ You already have a role in this team!", show_alert=True)
+            return
+
         # 1. ATOMIC ROLE ASSIGNMENT
         success = await repo.assign_role_atomically(game_id, team_code, role_enum, user_id)
 
@@ -233,15 +239,23 @@ def get_gameplay_handlers(repo: IGameRepository):
             await update.message.reply_text("⚠️ Please enter a valid positive number for your order.")
             return
 
+        # NEW: Concurrency-safe week advancement
+        trigger_next_week = False
+
         async with repo._lock:
             player_state.current_order_placed = order_amount
             await repo.save_game(game)
+
+            # We check if the team is ready INSIDE the lock to prevent race conditions
+            if team_state.is_ready_for_next_week():
+                trigger_next_week = True
 
         logger.info(f"📦 ACTION: User {update.effective_user.id} ({role.value}) ordered {order_amount} units.")
         await update.message.reply_text(f"📦 Order of **{order_amount}** recorded. Waiting for teammates...",
                                         parse_mode="Markdown")
 
-        if team_state.is_ready_for_next_week():
+        # Trigger the next week OUTSIDE the lock to prevent deadlocks
+        if trigger_next_week:
             await process_week_resolution(game, team_code, context, repo)
 
     async def process_week_resolution(game, team_code, context: ContextTypes.DEFAULT_TYPE, repo: IGameRepository):
