@@ -19,10 +19,32 @@ HELP_TEXT = """🎮 **راهنمای بازی Beer Distribution**
 هر هفته، پیامی حاوی وضعیت موجودی و تقاضا دریافت می‌کنید. شما فقط باید یک **عدد** بفرستید که مقدار سفارش شما از مرحله بالادستی است.
 ⚠️ **توجه:** دریافت سفارشات ۲ هفته زمان می‌برد! برنامه‌ریزی کنید."""
 
-GAME_NOT_FOUND = "❌ **بازی پیدا نشد.**\nلطفا شناسه (ID) را بررسی کنید. اگر ربات ری‌استارت شده باشد، حافظه بازی پاک شده است."
+GAME_NOT_FOUND = "❌ **بازی پیدا نشد.**\nلطفا شناسه (ID) را بررسی کنید."
 INVALID_ORDER = "⚠️ لطفا یک عدد صحیح و مثبت برای سفارش خود وارد کنید."
 ALREADY_ORDERED = "⏳ شما سفارش این هفته خود را ثبت کرده‌اید. منتظر سایر اعضای تیم باشید..."
 GAME_OVER = "🏁 **بازی به پایان رسید!** 🏁\nاستاد شما می‌تواند گزارشات نهایی را با دستور `/report` دریافت کند."
+
+def get_role_joined_msg(role_value, team_code):
+    return (
+        f"✅ **شما به عنوان {role_value} وارد شدید.**\n\n"
+        f"تیم: `{team_code}`\n"
+        f"در انتظار پیوستن سایر بازیکنان..."
+    )
+
+def get_week_1_msg(role_value, inventory, backlog, truck1, truck2):
+    return (
+        f"🚀 **شبیه‌سازی آغاز شد!** 🚀\n\n"
+        f"📅 **هفته ۱**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👤 **نقش شما:** {role_value}\n"
+        f"📦 **موجودی انبار:** `{inventory}` واحد\n"
+        f"⚠️ **سفارشات معوق (Backlog):** `{backlog}` واحد\n"
+        f"🚚 **بار در راه (دریافت هفته بعد):** `{truck1}` واحد\n"
+        f"🚛 **بار در راه (دریافت ۲ هفته بعد):** `{truck2}` واحد\n"
+        f"💸 **کل هزینه انباشته:** `$0.00`\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✏️ **لطفا مقدار سفارش خود برای هفته ۱ را (به عدد) وارد کنید:**"
+    )
 
 def get_week_status_msg(week, demand, inventory, backlog, truck1, truck2, total_cost):
     return (
@@ -38,12 +60,5 @@ def get_week_status_msg(week, demand, inventory, backlog, truck1, truck2, total_
         f"✏️ **لطفا مقدار سفارش خود برای هفته {week} را وارد کنید:**"
     )
 
-def get_final_report_header(role_name):
-    return f"🏁 **پایان بازی!**\n📊 **گزارش عملکرد شما ({role_name})**\n\n"
-
-# The table header with the new Backlog (Bck) column
-TABLE_HEADER = "`هفته|سفارش|موجودی|معوقه|هزینه| کل `\n`----------------------------------`\n"
-
-def get_table_row(w, order_amt, inv_amt, bck_amt, cost_amt, cumulative_cost):
-    # Formatted to keep columns aligned in Telegram's monospaced font
-    return f"`{w+1:02d}  | {order_amt:03d} | {inv_amt:03d}  | {bck_amt:03d}  |${cost_amt:<3.0f}|${cumulative_cost:<4.0f}`\n"
+def get_order_recorded_msg(amount):
+    return f"📦 سفارش **{amount}** واحد ثبت شد. در انتظار سایر هم‌تیمی‌ها..."

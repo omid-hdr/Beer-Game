@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  beer-bot:
+    build: .
+    container_name: beer_game_container
+    restart: unless-stopped
+    volumes:
+      # This mounts a persistent volume to the /data folder inside the container
+      - sqlite_data:/data
+    environment:
+      # Replace this with your actual Bot Token
+      - BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
+
+      # IMPORTANT PROXY SETTING:
+      # Docker cannot use '127.0.0.1' to reach your host's v2ray.
+      # You MUST use 'host.docker.internal' so the container can talk to your Windows machine.
+      - PROXY_URL=http://host.docker.internal:10809
+
+volumes:
+  sqlite_data:

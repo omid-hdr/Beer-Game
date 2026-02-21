@@ -1,17 +1,15 @@
-from telegram import Update
-from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 from domain.models import GameSession, GameConfig
 from application.interfaces import IGameRepository
 import string
 import secrets
 import logging
-
-from utils.reporting import create_global_cost_bar_chart, create_team_inventory_chart
+import random
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 
 logger = logging.getLogger(__name__)
 
-# استیت‌های جدید برای مکالمه اضافه شدند
-ASK_ROUNDS, ASK_DEMAND, ASK_INVENTORY, ASK_PIPELINE = range(4)
+ASK_ROUNDS, ASK_DEMAND_TYPE, HANDLE_DEMAND_INPUT, ASK_INVENTORY, ASK_PIPELINE = range(5)
 
 
 def generate_short_id(length: int = 5) -> str:
@@ -34,22 +32,68 @@ def get_admin_conversation_handler(repo: IGameRepository) -> ConversationHandler
             await update.message.reply_text("❌ لطفا یک عدد صحیح و مثبت وارد کنید.")
             return ASK_ROUNDS
 
-        await update.message.reply_text("الگوی تقاضای مشتری را با کاما جدا کنید.\n*(مثال: 4, 4, 8, 8)*",
-                                        parse_mode="Markdown")
-        return ASK_DEMAND
+        # NEW: Ask for Demand Type using a Reply Keyboard
+        reply_keyboard = [['STEP', 'RANDOM', 'MANUAL']]
+        await update.message.reply_text(
+            "نحوه تولید تقاضای مشتری را انتخاب کنید:\n\n"
+            "🔹 **STEP:** پرش در یک هفته خاص\n"
+            "🔹 **RANDOM:** اعداد تصادفی در یک بازه\n"
+            "🔹 **MANUAL:** وارد کردن دستی با کاما",
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
+            parse_mode="Markdown"
+        )
+        return ASK_DEMAND_TYPE
 
-    async def handle_demand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def handle_demand_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        choice = update.message.text.strip().upper()
+        context.user_data['demand_type'] = choice
+
+        if choice == 'STEP':
+            await update.message.reply_text(
+                "لطفا ۳ عدد را با فاصله وارد کنید (مقدار اولیه، هفته پرش، مقدار پرش):\nمثال: `3 5 2`",
+                reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+            return HANDLE_DEMAND_INPUT
+        elif choice == 'RANDOM':
+            await update.message.reply_text("لطفا ۲ عدد را با فاصله وارد کنید (حداقل، حداکثر):\nمثال: `3 10`",
+                                            reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+            return HANDLE_DEMAND_INPUT
+        elif choice == 'MANUAL':
+            await update.message.reply_text("لطفا مقادیر را با کاما جدا کنید:\nمثال: `4, 4, 8, 8`",
+                                            reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+            return HANDLE_DEMAND_INPUT
+        else:
+            await update.message.reply_text("لطفا یکی از گزینه‌های روی کیبورد را انتخاب کنید.")
+            return ASK_DEMAND_TYPE
+
+    async def handle_demand_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        choice = context.user_data.get('demand_type')
+        rounds = context.user_data['rounds']
+        text = update.message.text.strip()
+        demand_pattern = []
+
         try:
-            demand_pattern = [int(x.strip()) for x in update.message.text.split(',')]
-            context.user_data['demand_pattern'] = demand_pattern
-        except ValueError:
-            await update.message.reply_text("❌ فرمت نامعتبر. لطفا اعداد را با کاما جدا کنید.")
-            return ASK_DEMAND
+            if choice == 'STEP':
+                init_val, jump_week, jump_amt = map(int, text.split())
+                for w in range(1, rounds + 1):
+                    if w >= jump_week:
+                        demand_pattern.append(init_val + jump_amt)
+                    else:
+                        demand_pattern.append(init_val)
+            elif choice == 'RANDOM':
+                min_val, max_val = map(int, text.split())
+                demand_pattern = [random.randint(min_val, max_val) for _ in range(rounds)]
+            elif choice == 'MANUAL':
+                demand_pattern = [int(x.strip()) for x in text.split(',')]
+        except Exception:
+            await update.message.reply_text("❌ فرمت نامعتبر است. لطفا دوباره مطابق مثال وارد کنید.")
+            return HANDLE_DEMAND_INPUT
 
+        context.user_data['demand_pattern'] = demand_pattern
         await update.message.reply_text(
             "📦 **موجودی اولیه (Inventory)** در انبارِ هر نقش در شروع بازی چقدر باشد؟ (مثلا: 12)", parse_mode="Markdown")
         return ASK_INVENTORY
 
+    # ... (Keep handle_inventory, handle_pipeline, and cancel EXACTLY as they were before) ...
     async def handle_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         try:
             context.user_data['starting_inventory'] = int(update.message.text.strip())
@@ -112,7 +156,8 @@ def get_admin_conversation_handler(repo: IGameRepository) -> ConversationHandler
         entry_points=[CommandHandler("newgame", start_new_game)],
         states={
             ASK_ROUNDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_rounds)],
-            ASK_DEMAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_demand)],
+            ASK_DEMAND_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_demand_type)],
+            HANDLE_DEMAND_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_demand_input)],
             ASK_INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory)],
             ASK_PIPELINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pipeline)],
         },

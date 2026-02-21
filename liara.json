@@ -1,0 +1,9 @@
+{
+  "platform": "docker",
+  "disks": [
+    {
+      "name": "sqlite-data",
+      "mountTo": "/data"
+    }
+  ]
+}

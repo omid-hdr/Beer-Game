@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, fil
 from domain.models import TeamState, Role
 from application.interfaces import IGameRepository
 from presentation.keyboards import get_lobby_keyboard, get_role_selection_keyboard
+from utils.reporting import create_player_history_table
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +157,7 @@ def get_player_handlers(repo: IGameRepository):
 
         # 4. Update the current user's message
         await query.edit_message_text(
-            f"✅ *You joined as {role_value}*\n\n"
-            f"Team: `{team_code}`\n"
-            f"Waiting for other players to join...",
+            resources.get_role_joined_msg(role_value, team_code),
             parse_mode="Markdown",
             reply_markup=new_keyboard
         )
@@ -179,29 +178,18 @@ def get_player_handlers(repo: IGameRepository):
         # 6. TRIGGER WEEK 1 FOR EVERYONE
         if all(p.user_id is not None for p in team_state.players.values()):
             logger.info(f"🚀 TEAM FULL: Team [{team_code}] is starting Week 1!")
-
             for p_role, p_state in team_state.players.items():
                 if not p_state.user_id: continue
 
-                start_msg = (
-                    f"🚀 **THE SIMULATION HAS STARTED!** 🚀\n\n"
-                    f"📅 **WEEK 1**\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Your Role:** {p_role.value}\n"
-                    f"📦 **Current Inventory:** `{p_state.inventory}` units\n"
-                    f"⚠️ **Current Backlog:** `{p_state.backlog}` units\n"
-                    f"🚚 **Incoming (Next Week):** `{p_state.shipment_pipeline[0]}` units\n"
-                    f"🚛 **Incoming (In 2 Weeks):** `{p_state.shipment_pipeline[1]}` units\n"
-                    f"💸 **Total Cost Accumulation:** `$0.00`\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"✏️ **Please enter your order amount for Week 1 (type a number):**"
+                start_msg = resources.get_week_1_msg(
+                    role_value=p_role.value,
+                    inventory=p_state.inventory,
+                    backlog=p_state.backlog,
+                    truck1=p_state.shipment_pipeline[0],
+                    truck2=p_state.shipment_pipeline[1]
                 )
                 try:
-                    await context.bot.send_message(
-                        chat_id=p_state.user_id,
-                        text=start_msg,
-                        parse_mode="Markdown"
-                    )
+                    await context.bot.send_message(chat_id=p_state.user_id, text=start_msg, parse_mode="Markdown")
                 except Exception as e:
                     logger.error(f"Failed to send start message to {p_state.user_id}: {e}")
 
@@ -262,8 +250,10 @@ def get_gameplay_handlers(repo: IGameRepository):
 
         logger.info(
             f"✅ ACCEPTED: User {user_id} ({role.value}) ordered {order_amount} units for Week {team_state.current_week}.")
-        await update.message.reply_text(f"📦 Order of **{order_amount}** recorded. Waiting for teammates...",
-                                        parse_mode="Markdown")
+        await update.message.reply_text(
+            resources.get_order_recorded_msg(order_amount),
+            parse_mode="Markdown"
+        )
 
         # --- SYNCHRONIZATION CHECK ---
         logger.info(f"🔍 CHECKING SYNC FOR TEAM {team_code}...")
@@ -293,29 +283,24 @@ def get_gameplay_handlers(repo: IGameRepository):
 
             # 🏁 END OF GAME LOGIC: Send the final report table to each player
             if team_state.current_week > game.total_rounds:
+                logger.info(f"🏁 GAME OVER FOR TEAM {team_code}.")
                 for role_enum, p_state in team_state.players.items():
                     if not p_state.user_id: continue
 
-                    report_text = resources.get_final_report_header(role_enum.value)
-                    report_text += resources.TABLE_HEADER
-
-                    cumulative_cost = 0.0
-                    for w in range(game.total_rounds):
-                        order_amt = p_state.history_order[w] if w < len(p_state.history_order) else 0
-                        inv_amt = p_state.history_inventory[w] if w < len(p_state.history_inventory) else 0
-                        bck_amt = p_state.history_backlog[w] if w < len(
-                            p_state.history_backlog) else 0  # 👈 Backlog data pulled
-                        cost_amt = p_state.history_cost[w] if w < len(p_state.history_cost) else 0
-                        cumulative_cost += cost_amt
-
-                        report_text += resources.get_table_row(w, order_amt, inv_amt, bck_amt, cost_amt,
-                                                               cumulative_cost)
+                    # Generate the table as an IMAGE
+                    table_image_buf = create_player_history_table(p_state, game.total_rounds, role_enum.value)
 
                     try:
-                        await context.bot.send_message(chat_id=p_state.user_id, text=report_text, parse_mode="Markdown")
+                        await context.bot.send_photo(
+                            chat_id=p_state.user_id,
+                            photo=table_image_buf,
+                            caption=f"🏁 **بازی به پایان رسید!**\n📊 کارنامه نهایی شما پیوست شده است.\nاستاد می‌تواند گزارش کلی را با دستور `/report` مشاهده کند.",
+                            parse_mode="Markdown"
+                        )
                     except Exception as e:
                         logger.error(f"Failed to send end report to {p_state.user_id}: {e}")
                 return
+
 
                 # 📢 ONGOING GAME LOGIC
             for role_enum, p_state in team_state.players.items():

@@ -1,11 +1,9 @@
 import logging
-import os
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import asyncio
-from infrastructure.sqlite_repo import SQLiteGameRepository
+
 from config import Config
+from infrastructure.repositories import InMemoryGameRepository
 from presentation.admin_handlers import get_admin_conversation_handler, get_report_handlers
 from presentation.player_handlers import get_player_handlers, get_gameplay_handlers
 import resources  # Import the new text resources
@@ -36,12 +34,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     logger.info("🚀 Starting Beer Distribution Game Bot...")
 
-    db_path = "/data/beer_game.db" if os.getenv("PROXY_URL") == "http://host.docker.internal:10809" else "beer_game.db"
     # 1. Init Repository
-    repo = SQLiteGameRepository(db_path)
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(repo.initialize())
+    repo = InMemoryGameRepository()
 
     # 2. Build App
     builder = ApplicationBuilder().token(Config.BOT_TOKEN)

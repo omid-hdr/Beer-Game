@@ -1,0 +1,13 @@
+app = "Beer-game"
+primary_region = "ams" # Amsterdam (Good latency for Telegram servers)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Empty proxy URL for production so it connects directly
+  PROXY_URL = ""
+
+[mounts]
+  source = "sqlite_data"
+  destination = "/data"

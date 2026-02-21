@@ -85,3 +85,55 @@ def create_team_detailed_dashboard(game: GameSession, team_code: str) -> io.Byte
     buf.seek(0)
     plt.close()
     return buf
+
+
+def create_player_history_table(player_state, total_rounds, role_name: str) -> io.BytesIO:
+    """Generates a styled Matplotlib table image for the end-of-game report."""
+    fig, ax = plt.subplots(figsize=(8, 0.4 * total_rounds + 2))
+    ax.axis('tight')
+    ax.axis('off')
+
+    table_data = []
+    cumulative_cost = 0.0
+
+    for w in range(total_rounds):
+        order_amt = player_state.history_order[w] if w < len(player_state.history_order) else 0
+        inv_amt = player_state.history_inventory[w] if w < len(player_state.history_inventory) else 0
+        bck_amt = player_state.history_backlog[w] if w < len(player_state.history_backlog) else 0
+        cost_amt = player_state.history_cost[w] if w < len(player_state.history_cost) else 0
+        cumulative_cost += cost_amt
+
+        table_data.append([
+            f"Week {w + 1}",
+            str(order_amt),
+            str(inv_amt),
+            str(bck_amt),
+            f"${cost_amt:.0f}",
+            f"${cumulative_cost:.0f}"
+        ])
+
+    col_labels = ['Week', 'Order', 'Inventory', 'Backlog', 'Cost', 'Total Cost']
+
+    table = ax.table(cellText=table_data, colLabels=col_labels, loc='center', cellLoc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1, 1.5)
+
+    # Styling the header
+    for i in range(len(col_labels)):
+        table[(0, i)].set_facecolor("#4472C4")
+        table[(0, i)].set_text_props(color="w", weight="bold")
+
+    # Alternating row colors
+    for (row, col), cell in table.get_celld().items():
+        if row > 0:
+            cell.set_facecolor("#D9E1F2" if row % 2 == 0 else "w")
+
+    plt.title(f"Final Performance - {role_name}", pad=20, fontsize=16, weight='bold')
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+    buf.seek(0)
+    plt.close()
+    return buf
