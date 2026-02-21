@@ -7,7 +7,18 @@ from domain.models import GameSession, Role
 class InMemoryGameRepository(IGameRepository):
     def __init__(self):
         self._games: Dict[str, GameSession] = {}
-        self._lock = asyncio.Lock()  # Prevents race conditions during concurrent saves
+        self._lock = asyncio.Lock()
+        self._lobby_trackers: Dict[str, list[tuple[int, int]]] = {}  # team_code -> [(chat_id, message_id)]
+
+    async def track_lobby_message(self, team_code: str, chat_id: int, message_id: int) -> None:
+        async with self._lock:
+            if team_code not in self._lobby_trackers:
+                self._lobby_trackers[team_code] = []
+            self._lobby_trackers[team_code].append((chat_id, message_id))
+
+    async def get_lobby_messages(self, team_code: str) -> list[tuple[int, int]]:
+        async with self._lock:
+            return self._lobby_trackers.get(team_code, []).copy()
 
     async def save_game(self, game: GameSession) -> None:
         async with self._lock:

@@ -24,3 +24,12 @@ class IGameRepository(ABC):
         """Attempts to assign a role. Returns True if successful, False if already taken."""
         pass
 
+    @abstractmethod
+    async def track_lobby_message(self, team_code: str, chat_id: int, message_id: int) -> None:
+        """Saves a message ID so it can be updated live when roles are taken."""
+        pass
+
+    @abstractmethod
+    async def get_lobby_messages(self, team_code: str) -> list[tuple[int, int]]:
+        """Returns a list of (chat_id, message_id) for a team's lobby."""
+        pass
