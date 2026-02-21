@@ -207,8 +207,12 @@ def get_player_handlers(repo: IGameRepository):
 
 def get_gameplay_handlers(repo: IGameRepository):
     async def handle_order_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        logger.info(f"📥 REQUEST: User {user_id} sent text: '{update.message.text}'")
+
         user_data = context.user_data
         if 'game_id' not in user_data or 'team_code' not in user_data:
+            logger.warning(f"⚠️ IGNORED: User {user_id} is not in an active game context.")
             return
 
         game_id = user_data['game_id']
@@ -217,6 +221,7 @@ def get_gameplay_handlers(repo: IGameRepository):
 
         game = await repo.get_game(game_id)
         if not game or team_code not in game.teams:
+            logger.error(f"❌ ERROR: Game {game_id} or Team {team_code} not found in repository.")
             await update.message.reply_text("❌ Your game session has ended or is invalid.")
             return
 
@@ -224,10 +229,13 @@ def get_gameplay_handlers(repo: IGameRepository):
         player_state = team_state.players[role]
 
         if team_state.current_week > game.total_rounds:
+            logger.info(f"🛑 REJECTED: User {user_id} ordered, but Game {game_id} is already over.")
             await update.message.reply_text("🏁 The game has already ended! Check with your professor for the results.")
             return
 
         if player_state.current_order_placed is not None:
+            logger.info(
+                f"⏳ REJECTED: User {user_id} ({role.value}) already ordered {player_state.current_order_placed} this week.")
             await update.message.reply_text(
                 "⏳ You have already placed your order for this week. Waiting for your teammates...")
             return
@@ -236,42 +244,54 @@ def get_gameplay_handlers(repo: IGameRepository):
             order_amount = int(update.message.text.strip())
             if order_amount < 0: raise ValueError
         except ValueError:
+            logger.warning(f"⚠️ INVALID INPUT: User {user_id} sent non-positive integer.")
             await update.message.reply_text("⚠️ Please enter a valid positive number for your order.")
             return
 
-        trigger_next_week = False
+        # --- UPDATE STATE (No explicit handler lock needed, prevents deadlock!) ---
+        player_state.current_order_placed = order_amount
+        await repo.save_game(game)
 
-        # 1. LOCK ONLY FOR THE ORDER UPDATE
-        async with repo._lock:
-            player_state.current_order_placed = order_amount
-            await repo.save_game(game)
-
-            # Check if all 4 players have placed orders
-            if team_state.is_ready_for_next_week():
-                trigger_next_week = True
-
-        logger.info(f"📦 ACTION: User {update.effective_user.id} ({role.value}) ordered {order_amount} units.")
+        logger.info(
+            f"✅ ACCEPTED: User {user_id} ({role.value}) ordered {order_amount} units for Week {team_state.current_week}.")
         await update.message.reply_text(f"📦 Order of **{order_amount}** recorded. Waiting for teammates...",
                                         parse_mode="Markdown")
 
-        # 2. TRIGGER RESOLUTION OUTSIDE THE LOCK TO PREVENT DEADLOCK
-        if trigger_next_week:
-            logger.info(f"⚙️ TEAM {team_code} IS READY. Advancing to the next week...")
+        # --- SYNCHRONIZATION CHECK ---
+        logger.info(f"🔍 CHECKING SYNC FOR TEAM {team_code}...")
+
+        # Build a string showing exactly who is ready and who is missing for the logs
+        sync_status = []
+        for r, p in team_state.players.items():
+            status = str(p.current_order_placed) if p.current_order_placed is not None else "WAITING"
+            sync_status.append(f"{r.value}: {status}")
+
+        logger.info(f"📊 TEAM STATUS -> [{', '.join(sync_status)}]")
+
+        if team_state.is_ready_for_next_week():
+            logger.info(f"🚀 ALL 4 PLAYERS READY! Advancing Team {team_code} to next week...")
             await process_week_resolution(game, team_code, context, repo)
+        else:
+            logger.info(f"⏳ Team {team_code} is NOT ready yet.")
 
     async def process_week_resolution(game, team_code, context: ContextTypes.DEFAULT_TYPE, repo: IGameRepository):
+        logger.info(f"⚙️ EXECUTING WEEK RESOLUTION FOR TEAM {team_code}...")
         try:
             team_state = game.teams[team_code]
             demand = game.get_demand_for_week(team_state.current_week)
+            logger.info(f"📉 Incoming customer demand for Week {team_state.current_week}: {demand}")
 
-            # Advance the core simulation logic (Synchronous, no lock needed here)
+            # Advance the core simulation logic
+            logger.info("🧮 Running System Dynamics math (advance_week)...")
             team_state.advance_week(customer_demand=demand, config=game.config)
 
-            # Save the game (This method handles its own lock safely)
+            # Save the new state
             await repo.save_game(game)
+            logger.info("💾 State saved successfully.")
 
             # Check if game just ended
             if team_state.current_week > game.total_rounds:
+                logger.info(f"🏁 GAME OVER FOR TEAM {team_code}. Reached round {game.total_rounds}.")
                 await broadcast_to_team(
                     team_state, context,
                     "🏁 **GAME OVER!** 🏁\nAll rounds completed. Your professor can now generate the final reports using `/report`."
@@ -279,6 +299,7 @@ def get_gameplay_handlers(repo: IGameRepository):
                 return
 
             # Broadcast the new week's status to each player
+            logger.info(f"📢 Broadcasting Week {team_state.current_week} status to players...")
             for role_enum, p_state in team_state.players.items():
                 if not p_state.user_id: continue
 
@@ -303,17 +324,16 @@ def get_gameplay_handlers(repo: IGameRepository):
             logger.info(f"✅ SUCCESS: Team {team_code} successfully advanced to Week {team_state.current_week}.")
 
         except Exception as e:
-            # If the pure Python Domain logic crashes, we will see it here in the logs!
             logger.error(f"❌ CRITICAL ERROR in process_week_resolution: {e}", exc_info=True)
             await broadcast_to_team(team_state, context,
-                                    "⚠️ A critical server error occurred while calculating the next week.")
+                                    "⚠️ A critical server error occurred while calculating the next week. Please check the logs.")
 
     async def broadcast_to_team(team_state, context, message: str):
-        for player in team_state.players.values():
+        for role, player in team_state.players.items():
             if player.user_id:
                 try:
                     await context.bot.send_message(chat_id=player.user_id, text=message, parse_mode="Markdown")
                 except Exception as e:
-                    logger.error(f"Failed to send message to user {player.user_id}: {e}")
+                    logger.error(f"❌ Failed to send message to user {player.user_id} ({role.value}): {e}")
 
     return [MessageHandler(filters.Regex(r'^\d+$'), handle_order_input)]
