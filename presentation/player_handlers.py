@@ -239,14 +239,14 @@ def get_gameplay_handlers(repo: IGameRepository):
             await update.message.reply_text("⚠️ Please enter a valid positive number for your order.")
             return
 
-        # NEW: Concurrency-safe week advancement
         trigger_next_week = False
 
+        # 1. LOCK ONLY FOR THE ORDER UPDATE
         async with repo._lock:
             player_state.current_order_placed = order_amount
             await repo.save_game(game)
 
-            # We check if the team is ready INSIDE the lock to prevent race conditions
+            # Check if all 4 players have placed orders
             if team_state.is_ready_for_next_week():
                 trigger_next_week = True
 
@@ -254,45 +254,59 @@ def get_gameplay_handlers(repo: IGameRepository):
         await update.message.reply_text(f"📦 Order of **{order_amount}** recorded. Waiting for teammates...",
                                         parse_mode="Markdown")
 
-        # Trigger the next week OUTSIDE the lock to prevent deadlocks
+        # 2. TRIGGER RESOLUTION OUTSIDE THE LOCK TO PREVENT DEADLOCK
         if trigger_next_week:
+            logger.info(f"⚙️ TEAM {team_code} IS READY. Advancing to the next week...")
             await process_week_resolution(game, team_code, context, repo)
 
     async def process_week_resolution(game, team_code, context: ContextTypes.DEFAULT_TYPE, repo: IGameRepository):
-        team_state = game.teams[team_code]
-        demand = game.get_demand_for_week(team_state.current_week)
+        try:
+            team_state = game.teams[team_code]
+            demand = game.get_demand_for_week(team_state.current_week)
 
-        async with repo._lock:
+            # Advance the core simulation logic (Synchronous, no lock needed here)
             team_state.advance_week(customer_demand=demand, config=game.config)
+
+            # Save the game (This method handles its own lock safely)
             await repo.save_game(game)
 
-        if team_state.current_week > game.total_rounds:
-            await broadcast_to_team(
-                team_state, context,
-                "🏁 **GAME OVER!** 🏁\nAll rounds completed. Your professor can now generate the final reports."
-            )
-            return
+            # Check if game just ended
+            if team_state.current_week > game.total_rounds:
+                await broadcast_to_team(
+                    team_state, context,
+                    "🏁 **GAME OVER!** 🏁\nAll rounds completed. Your professor can now generate the final reports using `/report`."
+                )
+                return
 
-        for role_enum, p_state in team_state.players.items():
-            if not p_state.user_id: continue
+            # Broadcast the new week's status to each player
+            for role_enum, p_state in team_state.players.items():
+                if not p_state.user_id: continue
 
-            status_msg = (
-                f"📅 **WEEK {team_state.current_week}**\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"📥 **Incoming Delivery:** You just received items.\n"
-                f"📤 **Demand Received:** `{p_state.demand_received}` units\n"
-                f"📦 **Current Inventory:** `{p_state.inventory}` units\n"
-                f"⚠️ **Current Backlog:** `{p_state.backlog}` units\n"
-                f"💸 **Total Cost Accumulation:** `${p_state.total_cost:.2f}`\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"Please enter your order amount for this week (type a number):"
-            )
+                status_msg = (
+                    f"📅 **WEEK {team_state.current_week}**\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"📥 **Incoming Delivery:** You received items from transit.\n"
+                    f"📤 **Demand Received:** `{p_state.demand_received}` units\n"
+                    f"📦 **Current Inventory:** `{p_state.inventory}` units\n"
+                    f"⚠️ **Current Backlog:** `{p_state.backlog}` units\n"
+                    f"💸 **Total Cost Accumulation:** `${p_state.total_cost:.2f}`\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"✏️ **Please enter your order amount for Week {team_state.current_week} (type a number):**"
+                )
 
-            await context.bot.send_message(
-                chat_id=p_state.user_id,
-                text=status_msg,
-                parse_mode="Markdown"
-            )
+                await context.bot.send_message(
+                    chat_id=p_state.user_id,
+                    text=status_msg,
+                    parse_mode="Markdown"
+                )
+
+            logger.info(f"✅ SUCCESS: Team {team_code} successfully advanced to Week {team_state.current_week}.")
+
+        except Exception as e:
+            # If the pure Python Domain logic crashes, we will see it here in the logs!
+            logger.error(f"❌ CRITICAL ERROR in process_week_resolution: {e}", exc_info=True)
+            await broadcast_to_team(team_state, context,
+                                    "⚠️ A critical server error occurred while calculating the next week.")
 
     async def broadcast_to_team(team_state, context, message: str):
         for player in team_state.players.values():
