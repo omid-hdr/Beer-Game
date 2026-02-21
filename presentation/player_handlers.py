@@ -66,6 +66,11 @@ def get_player_handlers(repo: IGameRepository):
                 return
 
             new_team = TeamState(team_code=team_code)
+
+            for p in new_team.players.values():
+                p.inventory = game.config.starting_inventory
+                p.shipment_pipeline = [game.config.starting_pipeline, game.config.starting_pipeline]
+
             game.teams[team_code] = new_team
             await repo.save_game(game)
 
@@ -184,6 +189,8 @@ def get_player_handlers(repo: IGameRepository):
                     f"👤 **Your Role:** {p_role.value}\n"
                     f"📦 **Current Inventory:** `{p_state.inventory}` units\n"
                     f"⚠️ **Current Backlog:** `{p_state.backlog}` units\n"
+                    f"🚚 **Incoming (Next Week):** `{p_state.shipment_pipeline[0]}` units\n"
+                    f"🚛 **Incoming (In 2 Weeks):** `{p_state.shipment_pipeline[1]}` units\n"
                     f"💸 **Total Cost Accumulation:** `$0.00`\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"✏️ **Please enter your order amount for Week 1 (type a number):**"
@@ -279,37 +286,55 @@ def get_gameplay_handlers(repo: IGameRepository):
         try:
             team_state = game.teams[team_code]
             demand = game.get_demand_for_week(team_state.current_week)
-            logger.info(f"📉 Incoming customer demand for Week {team_state.current_week}: {demand}")
 
-            # Advance the core simulation logic
-            logger.info("🧮 Running System Dynamics math (advance_week)...")
             team_state.advance_week(customer_demand=demand, config=game.config)
-
-            # Save the new state
             await repo.save_game(game)
-            logger.info("💾 State saved successfully.")
 
-            # Check if game just ended
+            # 🏁 END OF GAME LOGIC: Send the final report table to each player
             if team_state.current_week > game.total_rounds:
-                logger.info(f"🏁 GAME OVER FOR TEAM {team_code}. Reached round {game.total_rounds}.")
-                await broadcast_to_team(
-                    team_state, context,
-                    "🏁 **GAME OVER!** 🏁\nAll rounds completed. Your professor can now generate the final reports using `/report`."
-                )
+                logger.info(f"🏁 GAME OVER FOR TEAM {team_code}.")
+
+                for role_enum, p_state in team_state.players.items():
+                    if not p_state.user_id: continue
+
+                    # Build the Markdown table
+                    report_text = f"🏁 **GAME OVER!**\n📊 **Your Performance Report ({role_enum.value})**\n\n"
+                    report_text += "`Wk | Ord | Inv | Cost | Total`\n"
+                    report_text += "`-----------------------------`\n"
+
+                    cumulative_cost = 0.0
+                    for w in range(game.total_rounds):
+                        order_amt = p_state.history_order[w] if w < len(p_state.history_order) else 0
+                        inv_amt = p_state.history_inventory[w] if w < len(p_state.history_inventory) else 0
+                        cost_amt = p_state.history_cost[w] if w < len(p_state.history_cost) else 0
+                        cumulative_cost += cost_amt
+
+                        report_text += f"`{w + 1:02d} | {order_amt:03d} | {inv_amt:03d} | ${cost_amt:<4.0f}| ${cumulative_cost:<4.0f}`\n"
+
+                    report_text += "\n*Your professor can now pull the global charts using /report.*"
+
+                    try:
+                        await context.bot.send_message(chat_id=p_state.user_id, text=report_text, parse_mode="Markdown")
+                    except Exception as e:
+                        logger.error(f"Failed to send end report to {p_state.user_id}: {e}")
                 return
 
-            # Broadcast the new week's status to each player
-            logger.info(f"📢 Broadcasting Week {team_state.current_week} status to players...")
+            # 📢 ONGOING GAME LOGIC: Broadcast new week's status
             for role_enum, p_state in team_state.players.items():
                 if not p_state.user_id: continue
+
+                # Failsafe for pipeline indexing
+                truck_1 = p_state.shipment_pipeline[0] if len(p_state.shipment_pipeline) > 0 else 0
+                truck_2 = p_state.shipment_pipeline[1] if len(p_state.shipment_pipeline) > 1 else 0
 
                 status_msg = (
                     f"📅 **WEEK {team_state.current_week}**\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📥 **Incoming Delivery:** You received items from transit.\n"
-                    f"📤 **Demand Received:** `{p_state.demand_received}` units\n"
+                    f"📥 **Customer Demand Received:** `{p_state.demand_received}` units\n"
                     f"📦 **Current Inventory:** `{p_state.inventory}` units\n"
                     f"⚠️ **Current Backlog:** `{p_state.backlog}` units\n"
+                    f"🚚 **Incoming (Next Week):** `{truck_1}` units\n"
+                    f"🚛 **Incoming (In 2 Weeks):** `{truck_2}` units\n"
                     f"💸 **Total Cost Accumulation:** `${p_state.total_cost:.2f}`\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"✏️ **Please enter your order amount for Week {team_state.current_week} (type a number):**"
@@ -321,12 +346,9 @@ def get_gameplay_handlers(repo: IGameRepository):
                     parse_mode="Markdown"
                 )
 
-            logger.info(f"✅ SUCCESS: Team {team_code} successfully advanced to Week {team_state.current_week}.")
-
         except Exception as e:
             logger.error(f"❌ CRITICAL ERROR in process_week_resolution: {e}", exc_info=True)
-            await broadcast_to_team(team_state, context,
-                                    "⚠️ A critical server error occurred while calculating the next week. Please check the logs.")
+            await broadcast_to_team(team_state, context, "⚠️ A critical server error occurred. Please check the logs.")
 
     async def broadcast_to_team(team_state, context, message: str):
         for role, player in team_state.players.items():

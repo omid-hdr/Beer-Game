@@ -37,6 +37,8 @@ class PlayerState:
     history_inventory: List[int] = field(default_factory=list)
     history_cost: List[float] = field(default_factory=list)
 
+    history_order: list = field(default_factory=list)
+
     def __post_init__(self):
         # Initialize pipeline with starting items if empty
         if not self.shipment_pipeline:
@@ -113,7 +115,8 @@ class TeamState:
             weekly_cost = player.calculate_cost(config)
             player.history_inventory.append(player.inventory)
             player.history_cost.append(weekly_cost)
-            player.current_order_placed = None
+            player.history_order.append(player.current_order_placed)
+            player.current_order_placed = None  # Reset for next round
             
         self.current_week += 1
 

@@ -1,33 +1,28 @@
 from telegram import Update
-from telegram.ext import ContextTypes, CommandHandler, ConversationHandler, MessageHandler, filters
+from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 from domain.models import GameSession, GameConfig
 from application.interfaces import IGameRepository
 import string
 import secrets
 import logging
 
-# IMPORT THE REPORTING UTILS
 from utils.reporting import create_global_cost_bar_chart, create_team_inventory_chart
 
 logger = logging.getLogger(__name__)
 
-# Conversation States
-ASK_ROUNDS, ASK_DEMAND = range(2)
+# استیت‌های جدید برای مکالمه اضافه شدند
+ASK_ROUNDS, ASK_DEMAND, ASK_INVENTORY, ASK_PIPELINE = range(4)
 
 
 def generate_short_id(length: int = 5) -> str:
-    """Generates a secure, readable random string (e.g., A1B2C)."""
     alphabet = string.ascii_uppercase + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
 def get_admin_conversation_handler(repo: IGameRepository) -> ConversationHandler:
     async def start_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        await update.message.reply_text(
-            "⚙️ *Beer Distribution Game Setup*\n\n"
-            "How many rounds (weeks) should this simulation last?",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("⚙️ **تنظیمات بازی جدید**\n\nتعداد راندهای (هفته‌های) بازی چقدر باشد؟",
+                                        parse_mode="Markdown")
         return ASK_ROUNDS
 
     async def handle_rounds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -36,59 +31,81 @@ def get_admin_conversation_handler(repo: IGameRepository) -> ConversationHandler
             if rounds <= 0: raise ValueError
             context.user_data['rounds'] = rounds
         except ValueError:
-            await update.message.reply_text("Please enter a valid positive integer for the rounds.")
+            await update.message.reply_text("❌ لطفا یک عدد صحیح و مثبت وارد کنید.")
             return ASK_ROUNDS
 
-        await update.message.reply_text(
-            "Great. Now, enter the customer demand pattern as a comma-separated list.\n"
-            "*(e.g., `4, 4, 8, 8`. If shorter than the total rounds, the last number will be repeated)*",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("الگوی تقاضای مشتری را با کاما جدا کنید.\n*(مثال: 4, 4, 8, 8)*",
+                                        parse_mode="Markdown")
         return ASK_DEMAND
 
     async def handle_demand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         try:
-            demand_str = update.message.text.strip()
-            demand_pattern = [int(x.strip()) for x in demand_str.split(',')]
+            demand_pattern = [int(x.strip()) for x in update.message.text.split(',')]
+            context.user_data['demand_pattern'] = demand_pattern
         except ValueError:
-            await update.message.reply_text(
-                "Invalid format. Please send a comma-separated list of numbers (e.g., 4, 4, 8, 8).")
+            await update.message.reply_text("❌ فرمت نامعتبر. لطفا اعداد را با کاما جدا کنید.")
             return ASK_DEMAND
 
+        await update.message.reply_text(
+            "📦 **موجودی اولیه (Inventory)** در انبارِ هر نقش در شروع بازی چقدر باشد؟ (مثلا: 12)", parse_mode="Markdown")
+        return ASK_INVENTORY
+
+    async def handle_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        try:
+            context.user_data['starting_inventory'] = int(update.message.text.strip())
+        except ValueError:
+            await update.message.reply_text("❌ لطفا یک عدد صحیح وارد کنید.")
+            return ASK_INVENTORY
+
+        await update.message.reply_text(
+            "🚚 **ظرفیت اولیه کامیون‌های در مسیر (Pipeline)** چقدر باشد؟\n*(یعنی بارهایی که الان در راه هستند. مثلا: 4)*",
+            parse_mode="Markdown")
+        return ASK_PIPELINE
+
+    async def handle_pipeline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        try:
+            starting_pipeline = int(update.message.text.strip())
+        except ValueError:
+            await update.message.reply_text("❌ لطفا یک عدد صحیح وارد کنید.")
+            return ASK_PIPELINE
+
+        # حالا همه اطلاعات را داریم، بازی را می‌سازیم
         rounds = context.user_data['rounds']
+        demand_pattern = context.user_data['demand_pattern']
+        starting_inventory = context.user_data['starting_inventory']
         game_id = generate_short_id()
 
-        # Instantiate the Phase 1 domain model
+        config = GameConfig(
+            starting_inventory=starting_inventory,
+            starting_pipeline=starting_pipeline
+        )
+
         new_game = GameSession(
             game_id=game_id,
             total_rounds=rounds,
             demand_pattern=demand_pattern,
-            config=GameConfig()  # Using default costs and inventory
+            config=config
         )
 
-        # Save to our infrastructure layer
         await repo.save_game(new_game)
-
-        # Clear temporary state
+        logger.info(f"✅ ACTION: Admin {update.effective_user.id} created Game [{game_id}]")
         context.user_data.clear()
 
         await update.message.reply_text(
-            f"✅ *Game Created Successfully!*\n\n"
-            f"🎮 *Game ID:* `{game_id}`\n"
-            f"⏳ *Rounds:* {rounds}\n\n"
-            f"Share this Game ID with your students. They can join by sending:\n"
+            f"✅ **بازی با موفقیت ساخته شد!**\n\n"
+            f"🎮 **Game ID:** `{game_id}`\n"
+            f"⏳ **راندها:** {rounds}\n"
+            f"📦 **موجودی اولیه انبار:** {starting_inventory}\n"
+            f"🚚 **بار اولیه در راه:** {starting_pipeline}\n\n"
+            f"این Game ID را به دانشجویان بدهید تا با کامند زیر جوین شوند:\n"
             f"`/join {game_id}`",
             parse_mode="Markdown"
         )
-
-        await repo.save_game(new_game)
-        logger.info(f"✅ ACTION: Admin {update.effective_user.id} created Game [{game_id}] with {rounds} rounds.")
-
         return ConversationHandler.END
 
     async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data.clear()
-        await update.message.reply_text("Game setup cancelled.")
+        await update.message.reply_text("ساخت بازی لغو شد.")
         return ConversationHandler.END
 
     return ConversationHandler(
@@ -96,10 +113,14 @@ def get_admin_conversation_handler(repo: IGameRepository) -> ConversationHandler
         states={
             ASK_ROUNDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_rounds)],
             ASK_DEMAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_demand)],
+            ASK_INVENTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inventory)],
+            ASK_PIPELINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pipeline)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
+
+# ... (بقیه کدهای get_report_handlers دست نخورده باقی بماند)
 
 # ... (import your reporting utils)
 def get_report_handlers(repo: IGameRepository):
