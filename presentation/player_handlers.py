@@ -1,7 +1,8 @@
 import secrets
 import string
 import logging
-import telegram  # Required for catching BadRequest
+import resources
+import telegram
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, filters, MessageHandler
 from domain.models import TeamState, Role
@@ -292,26 +293,23 @@ def get_gameplay_handlers(repo: IGameRepository):
 
             # 🏁 END OF GAME LOGIC: Send the final report table to each player
             if team_state.current_week > game.total_rounds:
-                logger.info(f"🏁 GAME OVER FOR TEAM {team_code}.")
-
                 for role_enum, p_state in team_state.players.items():
                     if not p_state.user_id: continue
 
-                    # Build the Markdown table
-                    report_text = f"🏁 **GAME OVER!**\n📊 **Your Performance Report ({role_enum.value})**\n\n"
-                    report_text += "`Wk | Ord | Inv | Cost | Total`\n"
-                    report_text += "`-----------------------------`\n"
+                    report_text = resources.get_final_report_header(role_enum.value)
+                    report_text += resources.TABLE_HEADER
 
                     cumulative_cost = 0.0
                     for w in range(game.total_rounds):
                         order_amt = p_state.history_order[w] if w < len(p_state.history_order) else 0
                         inv_amt = p_state.history_inventory[w] if w < len(p_state.history_inventory) else 0
+                        bck_amt = p_state.history_backlog[w] if w < len(
+                            p_state.history_backlog) else 0  # 👈 Backlog data pulled
                         cost_amt = p_state.history_cost[w] if w < len(p_state.history_cost) else 0
                         cumulative_cost += cost_amt
 
-                        report_text += f"`{w + 1:02d} | {order_amt:03d} | {inv_amt:03d} | ${cost_amt:<4.0f}| ${cumulative_cost:<4.0f}`\n"
-
-                    report_text += "\n*Your professor can now pull the global charts using /report.*"
+                        report_text += resources.get_table_row(w, order_amt, inv_amt, bck_amt, cost_amt,
+                                                               cumulative_cost)
 
                     try:
                         await context.bot.send_message(chat_id=p_state.user_id, text=report_text, parse_mode="Markdown")
@@ -319,36 +317,29 @@ def get_gameplay_handlers(repo: IGameRepository):
                         logger.error(f"Failed to send end report to {p_state.user_id}: {e}")
                 return
 
-            # 📢 ONGOING GAME LOGIC: Broadcast new week's status
+                # 📢 ONGOING GAME LOGIC
             for role_enum, p_state in team_state.players.items():
                 if not p_state.user_id: continue
 
-                # Failsafe for pipeline indexing
                 truck_1 = p_state.shipment_pipeline[0] if len(p_state.shipment_pipeline) > 0 else 0
                 truck_2 = p_state.shipment_pipeline[1] if len(p_state.shipment_pipeline) > 1 else 0
 
-                status_msg = (
-                    f"📅 **WEEK {team_state.current_week}**\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📥 **Customer Demand Received:** `{p_state.demand_received}` units\n"
-                    f"📦 **Current Inventory:** `{p_state.inventory}` units\n"
-                    f"⚠️ **Current Backlog:** `{p_state.backlog}` units\n"
-                    f"🚚 **Incoming (Next Week):** `{truck_1}` units\n"
-                    f"🚛 **Incoming (In 2 Weeks):** `{truck_2}` units\n"
-                    f"💸 **Total Cost Accumulation:** `${p_state.total_cost:.2f}`\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"✏️ **Please enter your order amount for Week {team_state.current_week} (type a number):**"
+                # Use the Farsi resource generator
+                status_msg = resources.get_week_status_msg(
+                    week=team_state.current_week,
+                    demand=p_state.demand_received,
+                    inventory=p_state.inventory,
+                    backlog=p_state.backlog,
+                    truck1=truck_1,
+                    truck2=truck_2,
+                    total_cost=p_state.total_cost
                 )
 
-                await context.bot.send_message(
-                    chat_id=p_state.user_id,
-                    text=status_msg,
-                    parse_mode="Markdown"
-                )
+                await context.bot.send_message(chat_id=p_state.user_id, text=status_msg, parse_mode="Markdown")
 
         except Exception as e:
             logger.error(f"❌ CRITICAL ERROR in process_week_resolution: {e}", exc_info=True)
-            await broadcast_to_team(team_state, context, "⚠️ A critical server error occurred. Please check the logs.")
+            await broadcast_to_team(team_state, context, "⚠️ خطایی در سرور رخ داد. لطفا با ادمین تماس بگیرید.")
 
     async def broadcast_to_team(team_state, context, message: str):
         for role, player in team_state.players.items():

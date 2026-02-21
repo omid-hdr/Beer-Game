@@ -1,38 +1,49 @@
 # resources.py
 
-HELP_TEXT = """
-🎮 **Beer Distribution Game - Player Guide**
+START_TEXT = """👋 **به ربات شبیه‌ساز زنجیره تامین خوش آمدید!**
 
-**The Concept:**
-You are part of a 4-stage supply chain:
-🏭 **Factory** ➔ 🚚 **Distributor** ➔ 🏢 **Wholesaler** ➔ 🏪 **Retailer**
+برای شروع، منتظر بمانید تا استاد شناسه بازی (Game ID) را به شما بدهد.
+سپس دستور زیر را وارد کنید:
+`/join <Game_ID>`"""
 
-**Your Goal:**
-Minimize total costs for your team. You must fulfill incoming orders while avoiding:
-1.  **Overstocking:** Holding inventory costs **$1.0** per unit/week.
-2.  **Backlogs:** Failing to fulfill an order costs **$2.0** per unit/week.
+HELP_TEXT = """🎮 **راهنمای بازی Beer Distribution**
 
-**How to Play:**
-1.  **The Delay:** When you place an order, it takes **2 weeks** to arrive in your inventory. You must plan ahead!
-2.  **Communication:** You cannot talk to teammates. Your *only* communication is the number of units you order.
-3.  **The Loop:** * Receive valid orders from the downstream node.
-    * Receive shipments from the upstream node.
-    * Type a number to place your order for next week.
+این ربات یک زنجیره تامین ۴ مرحله‌ای را شبیه‌سازی می‌کند:
+🏭 کارخانه ➔ 🚚 توزیع‌کننده ➔ 🏢 عمده‌فروش ➔ 🏪 خرده‌فروش
 
-**Commands:**
-/join `<GameID>` - Join a game lobby.
-/team `<TeamCode>` - Join a specific team.
-/help - Show this message.
-"""
+**هدف شما:** با هم‌تیمی‌های خود همکاری کنید تا تقاضای مشتری را برآورده کنید، در حالی که هزینه‌ها را در کمترین حالت نگه می‌دارید.
+۱. **انبارداری:** نگهداری کالا هزینه دارد.
+۲. **معوقه (Backlog):** عدم پاسخگویی به تقاضا جریمه سنگین‌تری دارد.
 
-START_TEXT = """
-👋 **Welcome to the Beer Game Bot!**
+**نحوه بازی:**
+هر هفته، پیامی حاوی وضعیت موجودی و تقاضا دریافت می‌کنید. شما فقط باید یک **عدد** بفرستید که مقدار سفارش شما از مرحله بالادستی است.
+⚠️ **توجه:** دریافت سفارشات ۲ هفته زمان می‌برد! برنامه‌ریزی کنید."""
 
-This bot runs the classic System Dynamics simulation.
-To start, wait for your instructor to give you a **Game ID**.
+GAME_NOT_FOUND = "❌ **بازی پیدا نشد.**\nلطفا شناسه (ID) را بررسی کنید. اگر ربات ری‌استارت شده باشد، حافظه بازی پاک شده است."
+INVALID_ORDER = "⚠️ لطفا یک عدد صحیح و مثبت برای سفارش خود وارد کنید."
+ALREADY_ORDERED = "⏳ شما سفارش این هفته خود را ثبت کرده‌اید. منتظر سایر اعضای تیم باشید..."
+GAME_OVER = "🏁 **بازی به پایان رسید!** 🏁\nاستاد شما می‌تواند گزارشات نهایی را با دستور `/report` دریافت کند."
 
-Then run: `/join <GameID>`
-"""
+def get_week_status_msg(week, demand, inventory, backlog, truck1, truck2, total_cost):
+    return (
+        f"📅 **هفته {week}**\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📥 **تقاضای دریافتی:** `{demand}` واحد\n"
+        f"📦 **موجودی انبار:** `{inventory}` واحد\n"
+        f"⚠️ **سفارشات معوق (Backlog):** `{backlog}` واحد\n"
+        f"🚚 **بار در راه (دریافت هفته بعد):** `{truck1}` واحد\n"
+        f"🚛 **بار در راه (دریافت ۲ هفته بعد):** `{truck2}` واحد\n"
+        f"💸 **کل هزینه انباشته:** `${total_cost:.2f}`\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✏️ **لطفا مقدار سفارش خود برای هفته {week} را وارد کنید:**"
+    )
 
-GAME_NOT_FOUND = "❌ **Game not found.**\nPlease check the ID. If the bot was restarted, the game memory has been cleared."
+def get_final_report_header(role_name):
+    return f"🏁 **پایان بازی!**\n📊 **گزارش عملکرد شما ({role_name})**\n\n"
 
+# The table header with the new Backlog (Bck) column
+TABLE_HEADER = "`هفته|سفارش|موجودی|معوقه|هزینه| کل `\n`----------------------------------`\n"
+
+def get_table_row(w, order_amt, inv_amt, bck_amt, cost_amt, cumulative_cost):
+    # Formatted to keep columns aligned in Telegram's monospaced font
+    return f"`{w+1:02d}  | {order_amt:03d} | {inv_amt:03d}  | {bck_amt:03d}  |${cost_amt:<3.0f}|${cumulative_cost:<4.0f}`\n"
